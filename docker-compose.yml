@@ -3,14 +3,20 @@ services:
     build:
       context: ./backend
     environment:
-      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env}
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
       DATABASE_URL: sqlite:///./data/ag_creator.sqlite3
+      AG_CREATOR_ACCESS_TOKEN: ${AG_CREATOR_ACCESS_TOKEN:?Set AG_CREATOR_ACCESS_TOKEN in .env}
     ports:
       - "8000:8000"
     volumes:
       - ag_creator_data:/app/data
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
 
   frontend:
     build:
@@ -20,7 +26,8 @@ services:
     ports:
       - "5173:5173"
     depends_on:
-      - backend
+      backend:
+        condition: service_healthy
 
 volumes:
   ag_creator_data:

@@ -17,6 +17,8 @@ const chatting = ref(false);
 const deleting = ref(false);
 const error = ref('');
 const health = ref(null);
+const accessToken = ref(sessionStorage.getItem('agCreatorAccessToken') || '');
+const accessInput = ref(accessToken.value);
 
 const selectedGroup = computed(() => groups.value.find((group) => group.id === selectedGroupId.value));
 const agents = computed(() => groups.value.flatMap((group) => group.agents || []));
@@ -24,8 +26,9 @@ const selectedAgent = computed(() => agents.value.find((agent) => agent.id === s
 const totalMessages = computed(() => health.value?.message_count || 0);
 
 async function fetchJson(path, options = {}) {
+  const secureHeaders = accessToken.value ? { 'X-AG-Creator-Token': accessToken.value } : {};
   const response = await fetch(`${apiBaseUrl}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: { 'Content-Type': 'application/json', ...secureHeaders, ...(options.headers || {}) },
     ...options,
   });
   const payload = await response.json().catch(() => ({}));
@@ -33,6 +36,17 @@ async function fetchJson(path, options = {}) {
     throw new Error(payload.detail || payload.error || 'Erreur API');
   }
   return payload;
+}
+
+function saveAccessToken() {
+  accessToken.value = accessInput.value.trim();
+  if (accessToken.value) {
+    sessionStorage.setItem('agCreatorAccessToken', accessToken.value);
+  } else {
+    sessionStorage.removeItem('agCreatorAccessToken');
+  }
+  error.value = '';
+  loadGroups();
 }
 
 async function loadHealth() {
@@ -185,7 +199,7 @@ onMounted(async () => {
           <h1>AG Creator by Altay</h1>
           <p class="subtitle">
             Transforme une consigne francaise en groupes d'agents, conserve les conversations,
-            et pilote chaque specialiste depuis une interface web mobile-first.
+            et partage la memoire entre les agents d'un meme groupe.
           </p>
         </div>
       </div>
@@ -224,9 +238,16 @@ onMounted(async () => {
             </button>
           </div>
           <p v-if="error" class="error">{{ error }}</p>
+          <form class="access-form" @submit.prevent="saveAccessToken">
+            <label>
+              Code d'acces API
+              <input v-model="accessInput" type="password" placeholder="Defini dans .env" />
+            </label>
+            <button class="ghost-action">Enregistrer</button>
+          </form>
           <div class="security-note">
             <strong>Securite</strong>
-            <span>La cle IA reste sur le backend. Le navigateur ne recoit jamais le secret fournisseur.</span>
+            <span>La cle IA reste sur le backend. Le code d'acces protege les routes applicatives.</span>
           </div>
         </div>
 

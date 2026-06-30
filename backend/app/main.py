@@ -1,4 +1,5 @@
 import json
+import hmac
 import os
 import re
 import sqlite3
@@ -21,6 +22,7 @@ ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip()
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/ag_creator.sqlite3").strip()
+AG_CREATOR_ACCESS_TOKEN = os.getenv("AG_CREATOR_ACCESS_TOKEN", "").strip()
 
 app = FastAPI(
     title=f"{APP_NAME} API",
@@ -33,7 +35,7 @@ app.add_middleware(
     allow_origins=[FRONTEND_ORIGIN],
     allow_credentials=True,
     allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
-    allow_headers=["Content-Type"],
+    allow_headers=["Content-Type", "X-AG-Creator-Token"],
 )
 
 app.add_middleware(
@@ -160,6 +162,14 @@ def require_claude() -> Anthropic:
     return anthropic_client
 
 
+def require_api_access(request: Request) -> None:
+    if not AG_CREATOR_ACCESS_TOKEN:
+        return
+    provided = request.headers.get("X-AG-Creator-Token", "").strip()
+    if not hmac.compare_digest(provided, AG_CREATOR_ACCESS_TOKEN):
+        raise HTTPException(status_code=401, detail="Code d'acces API invalide ou manquant.")
+
+
 def extract_json_object(text: str) -> dict[str, Any]:
     cleaned = text.strip()
     cleaned = re.sub(r"^```(?:json)?", "", cleaned).strip()
@@ -216,6 +226,45 @@ def messages_for_agent(db: sqlite3.Connection, agent_id: str) -> list[dict[str, 
         (agent_id,),
     ).fetchall()
     return [dict(row) for row in rows]
+
+
+def group_conversation_context(
+    db: sqlite3.Connection,
+    group_id: str | None,
+    active_agent_id: str,
+    limit: int = 24,
+) -> str:
+    if not group_id:
+        return "Aucun contexte de groupe disponible."
+    rows = db.execute(
+        """
+        SELECT
+            messages.role,
+            messages.content,
+            messages.visible_reasoning,
+            messages.created_at,
+            agents.id AS agent_id,
+            agents.name AS agent_name,
+            agents.role AS agent_role
+        FROM messages
+        JOIN agents ON agents.id = messages.agent_id
+        WHERE agents.group_id = ?
+        ORDER BY messages.created_at DESC
+        LIMIT ?
+        """,
+        (group_id, limit),
+    ).fetchall()
+    if not rows:
+        return "Aucun autre echange dans ce groupe pour le moment."
+
+    lines = []
+    for row in reversed(rows):
+        speaker = "Utilisateur" if row["role"] == "user" else row["agent_name"]
+        scope = "agent actif" if row["agent_id"] == active_agent_id else f"autre agent: {row['agent_name']}"
+        lines.append(f"- [{row['created_at']}] {scope} / {speaker}: {row['content']}")
+        if row["visible_reasoning"]:
+            lines.append(f"  Trace visible: {row['visible_reasoning']}")
+    return "\n".join(lines)
 
 
 def normalize_agent(raw: dict[str, Any], index: int, source_instruction: str, group_id: str) -> dict[str, Any]:
@@ -309,6 +358,7 @@ Contraintes:
 - le groupe doit avoir un titre court et une synthese claire;
 - chaque agent doit avoir une responsabilite claire et non redondante;
 - les prompts systeme doivent etre directement utilisables pour converser avec l'agent;
+- chaque prompt systeme doit rappeler que l'agent fait partie d'un groupe et doit tenir compte de la memoire partagee fournie par le backend;
 - creation_reasoning doit expliquer publiquement pourquoi cet agent existe, sans reveler de raisonnement interne cache;
 - retourne uniquement un JSON valide, sans markdown.
 
@@ -373,11 +423,13 @@ def health() -> dict[str, Any]:
         "group_count": group_count,
         "agent_count": agent_count,
         "message_count": message_count,
+        "api_access_protected": bool(AG_CREATOR_ACCESS_TOKEN),
     }
 
 
 @app.get("/api/groups")
-def list_groups() -> dict[str, Any]:
+def list_groups(request: Request) -> dict[str, Any]:
+    require_api_access(request)
     with connect_db() as db:
         groups = db.execute("SELECT * FROM groups ORDER BY created_at DESC").fetchall()
         payload = []
@@ -391,7 +443,8 @@ def list_groups() -> dict[str, Any]:
 
 
 @app.get("/api/groups/{group_id}")
-def get_group(group_id: str) -> dict[str, Any]:
+def get_group(group_id: str, request: Request) -> dict[str, Any]:
+    require_api_access(request)
     with connect_db() as db:
         group = db.execute("SELECT * FROM groups WHERE id = ?", (group_id,)).fetchone()
         if not group:
@@ -404,14 +457,16 @@ def get_group(group_id: str) -> dict[str, Any]:
 
 
 @app.get("/api/agents")
-def list_agents() -> dict[str, Any]:
+def list_agents(request: Request) -> dict[str, Any]:
+    require_api_access(request)
     with connect_db() as db:
         rows = db.execute("SELECT * FROM agents ORDER BY created_at DESC").fetchall()
         return {"agents": [agent_from_row(row) for row in rows]}
 
 
 @app.get("/api/agents/{agent_id}")
-def get_agent(agent_id: str) -> dict[str, Any]:
+def get_agent(agent_id: str, request: Request) -> dict[str, Any]:
+    require_api_access(request)
     with connect_db() as db:
         row = db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
         if not row:
@@ -420,9 +475,10 @@ def get_agent(agent_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/agents/generate")
-def generate_agents(request: GenerateAgentsRequest) -> dict[str, Any]:
+def generate_agents(payload: GenerateAgentsRequest, request: Request) -> dict[str, Any]:
+    require_api_access(request)
     try:
-        group, created = call_claude_for_group(request.instruction, request.count)
+        group, created = call_claude_for_group(payload.instruction, payload.count)
         insert_group_with_agents(group, created)
     except HTTPException:
         raise
@@ -433,7 +489,8 @@ def generate_agents(request: GenerateAgentsRequest) -> dict[str, Any]:
 
 
 @app.delete("/api/groups/{group_id}")
-def delete_group(group_id: str) -> dict[str, Any]:
+def delete_group(group_id: str, request: Request) -> dict[str, Any]:
+    require_api_access(request)
     with connect_db() as db:
         group = db.execute("SELECT id FROM groups WHERE id = ?", (group_id,)).fetchone()
         if not group:
@@ -444,7 +501,8 @@ def delete_group(group_id: str) -> dict[str, Any]:
 
 
 @app.delete("/api/agents/{agent_id}")
-def delete_agent(agent_id: str) -> dict[str, Any]:
+def delete_agent(agent_id: str, request: Request) -> dict[str, Any]:
+    require_api_access(request)
     with connect_db() as db:
         row = db.execute("SELECT id, group_id FROM agents WHERE id = ?", (agent_id,)).fetchone()
         if not row:
@@ -455,7 +513,8 @@ def delete_agent(agent_id: str) -> dict[str, Any]:
 
 
 @app.post("/api/agents/{agent_id}/chat")
-def chat_with_agent(agent_id: str, request: ChatRequest) -> dict[str, Any]:
+def chat_with_agent(agent_id: str, payload: ChatRequest, request: Request) -> dict[str, Any]:
+    require_api_access(request)
     client = require_claude()
     with connect_db() as db:
         row = db.execute("SELECT * FROM agents WHERE id = ?", (agent_id,)).fetchone()
@@ -469,11 +528,12 @@ def chat_with_agent(agent_id: str, request: ChatRequest) -> dict[str, Any]:
             INSERT INTO messages (id, agent_id, role, content, visible_reasoning, model, created_at)
             VALUES (?, ?, 'user', ?, '', ?, ?)
             """,
-            (user_message_id, agent_id, request.message, ANTHROPIC_MODEL, now_iso()),
+            (user_message_id, agent_id, payload.message, ANTHROPIC_MODEL, now_iso()),
         )
         db.commit()
 
         history = messages_for_agent(db, agent_id)[-12:]
+        shared_context = group_conversation_context(db, agent["group_id"], agent_id)
 
     prompt = """
 Reponds uniquement en JSON valide, sans markdown:
@@ -482,11 +542,23 @@ Reponds uniquement en JSON valide, sans markdown:
   "visible_reasoning": "trace explicative courte: donne les criteres, hypotheses et etapes visibles utilisees, sans reveler de chaine de pensee interne cachee"
 }
 """
+    system_prompt = f"""
+{agent['system_prompt']}
+
+Memoire partagee du groupe:
+{shared_context}
+
+Tu fais partie d'un groupe d'agents. Utilise la memoire partagee ci-dessus pour rester coherent avec les
+echanges des autres agents du meme groupe. Tu peux mentionner explicitement quand tu t'appuies sur une
+information dite par un autre agent. Ne pretend pas avoir vu des messages absents du contexte fourni.
+
+{prompt}
+"""
     response = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=1600,
         temperature=0.3,
-        system=f"{agent['system_prompt']}\n\n{prompt}",
+        system=system_prompt,
         messages=[{"role": item["role"], "content": item["content"]} for item in history],
     )
     payload = extract_json_object(text_from_claude_response(response))
