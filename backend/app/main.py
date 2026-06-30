@@ -1,8 +1,13 @@
+import base64
+import hashlib
 import json
 import hmac
 import os
 import re
 import sqlite3
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -14,15 +19,21 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from pydantic import BaseModel, Field
+from cryptography.hazmat.primitives import hashes
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from cryptography.hazmat.primitives.kdf.hkdf import HKDF
+from cryptography.hazmat.primitives.padding import PKCS7
 
 load_dotenv()
 
 APP_NAME = "AG Creator by Altay"
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+RAW_ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-sonnet-4-6").strip()
 FRONTEND_ORIGIN = os.getenv("FRONTEND_ORIGIN", "http://localhost:5173").strip()
 DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/ag_creator.sqlite3").strip()
 AG_CREATOR_ACCESS_TOKEN = os.getenv("AG_CREATOR_ACCESS_TOKEN", "").strip()
+ANTHROPIC_API_KEY_SOURCE = "missing"
+ANTHROPIC_API_KEY_RESOLUTION_ERROR = ""
 
 app = FastAPI(
     title=f"{APP_NAME} API",
@@ -43,6 +54,118 @@ app.add_middleware(
     allowed_hosts=["localhost", "127.0.0.1", "0.0.0.0", "*.localhost"],
 )
 
+
+def padded_urlsafe_b64decode(value: str) -> bytes:
+    padding = "=" * ((4 - len(value) % 4) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def parse_bitwarden_send_url(value: str) -> tuple[str, str, str] | None:
+    parsed = urllib.parse.urlparse(value)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+    fragment = parsed.fragment.strip("/")
+    parts = fragment.split("/")
+    if len(parts) >= 3 and parts[0] == "send":
+        base_url = f"{parsed.scheme}://{parsed.netloc}"
+        return base_url, parts[1], parts[2]
+    return None
+
+
+def derive_bitwarden_send_key(fragment_key: str) -> bytes:
+    raw_key = padded_urlsafe_b64decode(fragment_key)
+    if len(raw_key) == 64:
+        return raw_key
+    return HKDF(
+        algorithm=hashes.SHA256(),
+        length=64,
+        salt=b"bitwarden-send",
+        info=b"send",
+    ).derive(raw_key)
+
+
+def decrypt_bitwarden_enc_string(enc_string: str, fragment_key: str) -> str:
+    if not enc_string.startswith("2."):
+        raise ValueError("format chiffre Bitwarden non supporte")
+
+    try:
+        iv_b64, cipher_b64, mac_b64 = enc_string[2:].split("|", 2)
+        iv = base64.b64decode(iv_b64)
+        ciphertext = base64.b64decode(cipher_b64)
+        expected_mac = base64.b64decode(mac_b64)
+    except ValueError as exc:
+        raise ValueError("contenu Bitwarden Send invalide") from exc
+
+    key = derive_bitwarden_send_key(fragment_key)
+    encryption_key = key[:32]
+    mac_key = key[32:64]
+    actual_mac = hmac.new(mac_key, iv + ciphertext, hashlib.sha256).digest()
+    if not hmac.compare_digest(actual_mac, expected_mac):
+        raise ValueError("signature du secret Bitwarden Send invalide")
+
+    decryptor = Cipher(algorithms.AES(encryption_key), modes.CBC(iv)).decryptor()
+    padded_plaintext = decryptor.update(ciphertext) + decryptor.finalize()
+    unpadder = PKCS7(128).unpadder()
+    plaintext = unpadder.update(padded_plaintext) + unpadder.finalize()
+    return plaintext.decode("utf-8").strip()
+
+
+def extract_anthropic_key(value: str) -> str:
+    match = re.search(r"sk-ant-[A-Za-z0-9_-]+", value)
+    return match.group(0) if match else value.strip()
+
+
+def fetch_bitwarden_send_text(base_url: str, send_id: str) -> str:
+    request = urllib.request.Request(
+        f"{base_url}/api/sends/access/{urllib.parse.quote(send_id)}",
+        data=b"{}",
+        headers={
+            "Content-Type": "application/json",
+            "Send-Id": send_id,
+            "User-Agent": "AG-Creator-by-Altay/2.0",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raise ValueError(f"lien Bitwarden Send refuse par le serveur ({exc.code})") from exc
+    except urllib.error.URLError as exc:
+        raise ValueError("serveur Bitwarden Send inaccessible") from exc
+
+    text_payload = payload.get("text") or {}
+    encrypted_text = str(text_payload.get("text") or "").strip()
+    if not encrypted_text:
+        raise ValueError("le lien Bitwarden Send ne contient pas de texte")
+    return encrypted_text
+
+
+def resolve_anthropic_api_key(raw_value: str) -> str:
+    global ANTHROPIC_API_KEY_SOURCE, ANTHROPIC_API_KEY_RESOLUTION_ERROR
+
+    if not raw_value:
+        return ""
+
+    send_url = parse_bitwarden_send_url(raw_value)
+    if not send_url:
+        ANTHROPIC_API_KEY_SOURCE = "direct"
+        return extract_anthropic_key(raw_value)
+
+    ANTHROPIC_API_KEY_SOURCE = "bitwarden_send"
+    base_url, send_id, fragment_key = send_url
+    try:
+        encrypted_text = fetch_bitwarden_send_text(base_url, send_id)
+        if encrypted_text.startswith("sk-ant-"):
+            return extract_anthropic_key(encrypted_text)
+        decrypted_text = decrypt_bitwarden_enc_string(encrypted_text, fragment_key)
+        return extract_anthropic_key(decrypted_text)
+    except Exception as exc:
+        ANTHROPIC_API_KEY_RESOLUTION_ERROR = str(exc)
+        return ""
+
+
+ANTHROPIC_API_KEY = resolve_anthropic_api_key(RAW_ANTHROPIC_API_KEY)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
 
@@ -152,11 +275,17 @@ def on_startup() -> None:
 
 def require_claude() -> Anthropic:
     if anthropic_client is None:
+        resolution_hint = (
+            f" Resolution du lien Bitwarden Send impossible: {ANTHROPIC_API_KEY_RESOLUTION_ERROR}."
+            if ANTHROPIC_API_KEY_RESOLUTION_ERROR
+            else ""
+        )
         raise HTTPException(
             status_code=503,
             detail=(
                 "Le fournisseur IA n'est pas configure. Ajoute ANTHROPIC_API_KEY dans le fichier .env "
                 "du backend ou dans les variables Docker."
+                f"{resolution_hint}"
             ),
         )
     return anthropic_client
@@ -419,6 +548,8 @@ def health() -> dict[str, Any]:
         "service": APP_NAME,
         "model": ANTHROPIC_MODEL,
         "anthropic_configured": bool(ANTHROPIC_API_KEY),
+        "anthropic_key_source": ANTHROPIC_API_KEY_SOURCE,
+        "anthropic_key_resolved": bool(ANTHROPIC_API_KEY),
         "database": "sqlite",
         "group_count": group_count,
         "agent_count": agent_count,

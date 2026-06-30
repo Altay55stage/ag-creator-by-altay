@@ -69,7 +69,8 @@ openssl rand -hex 32
 Modifier `.env`:
 
 ```bash
-ANTHROPIC_API_KEY=votre_cle_anthropic
+# Valeur acceptee: une cle sk-ant-... ou un lien Vaultwarden/Bitwarden Send
+ANTHROPIC_API_KEY=votre_cle_anthropic_ou_lien_send
 ANTHROPIC_MODEL=claude-sonnet-4-6
 FRONTEND_ORIGIN=http://localhost:5173
 DATABASE_URL=sqlite:///./data/ag_creator.sqlite3
@@ -126,7 +127,7 @@ http://localhost:5173
 
 | Variable | Obligatoire | Utilisée Par | Description |
 | --- | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | Oui | Backend | Clé secrète du fournisseur IA. Ne jamais la mettre dans le frontend. |
+| `ANTHROPIC_API_KEY` | Oui | Backend | Clé secrète du fournisseur IA, ou lien Vaultwarden/Bitwarden Send contenant cette clé. Ne jamais la mettre dans le frontend. |
 | `ANTHROPIC_MODEL` | Oui | Backend | Nom du modèle utilisé pour créer les agents et discuter. |
 | `FRONTEND_ORIGIN` | Oui | Backend | Origine navigateur autorisée par CORS. |
 | `DATABASE_URL` | Oui | Backend | Emplacement SQLite, par exemple `sqlite:///./data/ag_creator.sqlite3`. |
@@ -138,14 +139,39 @@ Le fichier `.env` est ignoré par Git. Il ne faut jamais committer de vrais secr
 
 ### Clé Du Fournisseur IA
 
-La clé Anthropic est lue uniquement par le backend:
+La clé fournisseur est lue uniquement par le backend. Deux formats sont acceptés:
+
+- une clé directe `sk-ant-...`;
+- un lien Vaultwarden/Bitwarden Send dont le texte contient la clé.
+
+Le frontend Vue ne reçoit jamais cette clé. Il appelle uniquement l'API FastAPI locale.
+
+Au démarrage, le backend résout la variable:
 
 ```python
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+RAW_ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
+ANTHROPIC_API_KEY = resolve_anthropic_api_key(RAW_ANTHROPIC_API_KEY)
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 ```
 
-Le frontend Vue ne reçoit jamais cette clé. Il appelle uniquement l'API FastAPI locale.
+Si la valeur est un lien Send de type `https://.../#/send/<id>/<key>`, le backend:
+
+1. extrait l'URL du serveur, l'identifiant du Send et la clé du fragment;
+2. appelle l'endpoint serveur `/api/sends/access/<id>` avec le header `Send-Id`;
+3. récupère le texte chiffré;
+4. dérive les clés de chiffrement avec HKDF SHA-256;
+5. vérifie le HMAC du message;
+6. déchiffre le contenu AES-CBC;
+7. extrait uniquement la clé `sk-ant-...` pour initialiser le client IA.
+
+Le lien Send n'est pas envoyé au frontend et la vraie clé n'est pas affichée dans `/health`. La route de santé expose seulement `anthropic_key_source` et `anthropic_key_resolved`.
+
+Limites importantes:
+
+- le Send doit contenir un texte, pas un fichier;
+- le Send ne doit pas être expiré;
+- si le Send est supprimé ou désactivé, le backend ne pourra plus redémarrer avec ce lien;
+- en production, il vaut mieux utiliser un gestionnaire de secrets managé ou injecter directement le secret au runtime.
 
 ### Code D'accès API
 
@@ -422,4 +448,3 @@ Ce projet est conçu comme un prototype full-stack local. Pour une production r�
 - PostgreSQL à la place de SQLite si plusieurs utilisateurs écrivent en même temps;
 - configuration CORS et hosts adaptée au domaine de déploiement;
 - stratégie de sauvegarde des données persistantes.
-
