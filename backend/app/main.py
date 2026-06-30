@@ -178,6 +178,67 @@ class ChatRequest(BaseModel):
     message: str = Field(..., min_length=1, max_length=4000)
 
 
+CREATE_AGENT_GROUP_TOOL = {
+    "name": "create_agent_group",
+    "description": "Retourne un groupe d'agents IA complementaires au format structure.",
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["group", "agents"],
+        "properties": {
+            "group": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["title", "summary"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                },
+            },
+            "agents": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": False,
+                    "required": [
+                        "name",
+                        "role",
+                        "mission",
+                        "tools",
+                        "success_criteria",
+                        "system_prompt",
+                        "creation_reasoning",
+                    ],
+                    "properties": {
+                        "name": {"type": "string"},
+                        "role": {"type": "string"},
+                        "mission": {"type": "string"},
+                        "tools": {"type": "array", "items": {"type": "string"}},
+                        "success_criteria": {"type": "array", "items": {"type": "string"}},
+                        "system_prompt": {"type": "string"},
+                        "creation_reasoning": {"type": "string"},
+                    },
+                },
+            },
+        },
+    },
+}
+
+CHAT_RESPONSE_TOOL = {
+    "name": "answer_as_agent",
+    "description": "Retourne la reponse finale de l'agent et une trace explicative publique.",
+    "input_schema": {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["answer", "visible_reasoning"],
+        "properties": {
+            "answer": {"type": "string"},
+            "visible_reasoning": {"type": "string"},
+        },
+    },
+}
+
+
 @app.middleware("http")
 async def add_security_headers(request: Request, call_next) -> Response:
     response = await call_next(request)
@@ -312,6 +373,18 @@ def extract_json_object(text: str) -> dict[str, Any]:
 
 def text_from_claude_response(response: Any) -> str:
     return "".join(block.text for block in response.content if getattr(block, "type", "") == "text")
+
+
+def tool_input_from_response(response: Any, tool_name: str) -> dict[str, Any]:
+    for block in response.content:
+        if getattr(block, "type", "") == "tool_use" and getattr(block, "name", "") == tool_name:
+            tool_input = getattr(block, "input", None)
+            if isinstance(tool_input, dict):
+                return tool_input
+    text = text_from_claude_response(response)
+    if text:
+        return extract_json_object(text)
+    raise ValueError("Le fournisseur IA n'a pas retourne de donnees structurees exploitables.")
 
 
 def group_from_row(row: sqlite3.Row, agents: list[dict[str, Any]] | None = None) -> dict[str, Any]:
@@ -489,37 +562,21 @@ Contraintes:
 - les prompts systeme doivent etre directement utilisables pour converser avec l'agent;
 - chaque prompt systeme doit rappeler que l'agent fait partie d'un groupe et doit tenir compte de la memoire partagee fournie par le backend;
 - creation_reasoning doit expliquer publiquement pourquoi cet agent existe, sans reveler de raisonnement interne cache;
-- retourne uniquement un JSON valide, sans markdown.
+- utilise obligatoirement l'outil create_agent_group pour fournir le resultat structure;
+- cree exactement {count} agents, pas plus, pas moins.
 
 Consigne utilisateur:
 {instruction}
-
-Schema exact:
-{{
-  "group": {{
-    "title": "titre court du groupe",
-    "summary": "synthese de l'objectif collectif"
-  }},
-  "agents": [
-    {{
-      "name": "nom court",
-      "role": "role clair",
-      "mission": "mission concrete",
-      "tools": ["capacite 1", "capacite 2"],
-      "success_criteria": ["critere 1", "critere 2"],
-      "system_prompt": "prompt systeme complet en francais",
-      "creation_reasoning": "trace explicative publique du choix de cet agent"
-    }}
-  ]
-}}
 """
     response = client.messages.create(
         model=ANTHROPIC_MODEL,
-        max_tokens=3200,
+        max_tokens=6000,
         temperature=0.2,
+        tools=[CREATE_AGENT_GROUP_TOOL],
+        tool_choice={"type": "tool", "name": "create_agent_group"},
         messages=[{"role": "user", "content": prompt}],
     )
-    payload = extract_json_object(text_from_claude_response(response))
+    payload = tool_input_from_response(response, "create_agent_group")
     raw_group = payload.get("group") or {}
     raw_agents = payload.get("agents")
     if not isinstance(raw_agents, list) or len(raw_agents) != count:
@@ -666,13 +723,6 @@ def chat_with_agent(agent_id: str, payload: ChatRequest, request: Request) -> di
         history = messages_for_agent(db, agent_id)[-12:]
         shared_context = group_conversation_context(db, agent["group_id"], agent_id)
 
-    prompt = """
-Reponds uniquement en JSON valide, sans markdown:
-{
-  "answer": "reponse finale en francais",
-  "visible_reasoning": "trace explicative courte: donne les criteres, hypotheses et etapes visibles utilisees, sans reveler de chaine de pensee interne cachee"
-}
-"""
     system_prompt = f"""
 {agent['system_prompt']}
 
@@ -683,16 +733,20 @@ Tu fais partie d'un groupe d'agents. Utilise la memoire partagee ci-dessus pour 
 echanges des autres agents du meme groupe. Tu peux mentionner explicitement quand tu t'appuies sur une
 information dite par un autre agent. Ne pretend pas avoir vu des messages absents du contexte fourni.
 
-{prompt}
+Utilise obligatoirement l'outil answer_as_agent. La trace explicative doit rester publique et courte:
+criteres utilises, hypotheses visibles, informations du groupe exploitees. Ne revele pas de chaine de
+pensee interne cachee.
 """
     response = client.messages.create(
         model=ANTHROPIC_MODEL,
         max_tokens=1600,
         temperature=0.3,
         system=system_prompt,
+        tools=[CHAT_RESPONSE_TOOL],
+        tool_choice={"type": "tool", "name": "answer_as_agent"},
         messages=[{"role": item["role"], "content": item["content"]} for item in history],
     )
-    payload = extract_json_object(text_from_claude_response(response))
+    payload = tool_input_from_response(response, "answer_as_agent")
     answer = str(payload.get("answer") or "").strip()
     visible_reasoning = str(payload.get("visible_reasoning") or "").strip()
     if not answer:

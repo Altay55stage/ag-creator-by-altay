@@ -292,7 +292,7 @@ L'endpoint `POST /api/agents/generate` reçoit:
 }
 ```
 
-Le backend construit un prompt demandant une sortie JSON stricte:
+Le backend construit un prompt et impose un schéma structuré:
 
 ```json
 {
@@ -314,7 +314,9 @@ Le backend construit un prompt demandant une sortie JSON stricte:
 }
 ```
 
-Le backend parse le JSON, normalise les champs, génère les UUID, puis insère le groupe et ses agents dans SQLite.
+En pratique, le backend utilise le tool calling Anthropic avec un schéma strict `create_agent_group`.
+Cela évite de dépendre d'un JSON écrit en texte libre: le modèle remplit directement les champs `group` et `agents`.
+Le backend normalise ensuite les champs, génère les UUID, puis insère le groupe et ses agents dans SQLite.
 
 ## Mémoire Partagée Entre Agents
 
