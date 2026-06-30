@@ -7,7 +7,7 @@ services:
       ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-sonnet-4-6}
       FRONTEND_ORIGIN: ${FRONTEND_ORIGIN:-http://localhost:5173}
       DATABASE_URL: sqlite:///./data/ag_creator.sqlite3
-      AG_CREATOR_ACCESS_TOKEN: ${AG_CREATOR_ACCESS_TOKEN:?Set AG_CREATOR_ACCESS_TOKEN in .env}
+      AG_CREATOR_ACCESS_TOKEN: ${AG_CREATOR_ACCESS_TOKEN:-}
     ports:
       - "8000:8000"
     volumes:

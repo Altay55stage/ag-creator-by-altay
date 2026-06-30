@@ -121,8 +121,13 @@ h3 {
 
 .security-strip {
   display: grid;
-  grid-template-columns: 1fr 1fr 96px 96px;
+  grid-template-columns: 1fr 96px 96px;
   gap: 10px;
+  min-width: 360px;
+}
+
+.security-strip.protected {
+  grid-template-columns: 1fr 1fr 96px 96px;
   min-width: 560px;
 }
 

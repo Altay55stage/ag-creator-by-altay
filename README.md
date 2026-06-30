@@ -9,7 +9,7 @@ Le projet reste simple à lancer en local, mais il est structuré comme une vrai
 - persistance SQLite;
 - API Anthropic Messages;
 - Docker Compose;
-- code d'accès API local;
+- code d'accès API optionnel;
 - clé fournisseur IA uniquement côté backend;
 - mémoire conversationnelle partagée au niveau du groupe.
 
@@ -60,12 +60,6 @@ Copier le modèle d'environnement:
 cp .env.example .env
 ```
 
-Générer un code d'accès local pour protéger l'API:
-
-```bash
-openssl rand -hex 32
-```
-
 Modifier `.env`:
 
 ```bash
@@ -74,7 +68,7 @@ ANTHROPIC_API_KEY=votre_cle_anthropic_ou_lien_send
 ANTHROPIC_MODEL=claude-sonnet-4-6
 FRONTEND_ORIGIN=http://localhost:5173
 DATABASE_URL=sqlite:///./data/ag_creator.sqlite3
-AG_CREATOR_ACCESS_TOKEN=votre_token_aleatoire_64_hex
+AG_CREATOR_ACCESS_TOKEN=
 ```
 
 Lancer l'application:
@@ -89,11 +83,7 @@ Ouvrir:
 - santé backend: http://localhost:8000/health
 - documentation API: http://localhost:8000/docs
 
-Dans l'interface, coller la même valeur que `AG_CREATOR_ACCESS_TOKEN` dans le champ `Code d'acces API`.
-
-Si l'interface affiche `Code d'acces API invalide ou manquant` ou si les logs backend montrent `401 Unauthorized`,
-cela signifie que le code d'accès n'a pas été envoyé ou ne correspond pas à `AG_CREATOR_ACCESS_TOKEN`.
-Ce n'est pas une erreur Anthropic: l'appel IA n'est pas encore lancé tant que cette protection refuse la requête.
+Par défaut, `AG_CREATOR_ACCESS_TOKEN` est vide. L'application locale ne demande donc pas de code d'accès et la création d'agents fonctionne directement.
 
 Arrêter l'application:
 
@@ -135,7 +125,7 @@ http://localhost:5173
 | `ANTHROPIC_MODEL` | Oui | Backend | Nom du modèle utilisé pour créer les agents et discuter. |
 | `FRONTEND_ORIGIN` | Oui | Backend | Origine navigateur autorisée par CORS. |
 | `DATABASE_URL` | Oui | Backend | Emplacement SQLite, par exemple `sqlite:///./data/ag_creator.sqlite3`. |
-| `AG_CREATOR_ACCESS_TOKEN` | Oui | Backend + session utilisateur | Code d'accès local envoyé dans le header `X-AG-Creator-Token`. |
+| `AG_CREATOR_ACCESS_TOKEN` | Non | Backend + session utilisateur | Code d'accès optionnel. S'il est vide, les routes applicatives ne demandent pas de token. |
 
 Le fichier `.env` est ignoré par Git. Il ne faut jamais committer de vrais secrets.
 
@@ -177,22 +167,33 @@ Limites importantes:
 - si le Send est supprimé ou désactivé, le backend ne pourra plus redémarrer avec ce lien;
 - en production, il vaut mieux utiliser un gestionnaire de secrets managé ou injecter directement le secret au runtime.
 
-### Code D'accès API
+### Code D'accès API Optionnel
 
-Les routes applicatives sont protégées par un code d'accès local:
+Pour simplifier le lancement local, `AG_CREATOR_ACCESS_TOKEN` peut rester vide. Dans ce cas, le backend laisse passer les routes applicatives et l'interface ne montre pas de champ de code d'accès.
+
+Si on veut ajouter une protection simple plus tard, il suffit de mettre une valeur dans `.env`:
+
+```bash
+AG_CREATOR_ACCESS_TOKEN=une_valeur_longue_et_secrete
+```
+
+Quand cette variable est définie, le frontend doit envoyer ce header:
 
 ```http
 X-AG-Creator-Token: <AG_CREATOR_ACCESS_TOKEN>
 ```
 
-Le backend valide ce code avec `hmac.compare_digest`, ce qui évite une comparaison naïve de chaînes:
+Le backend active alors la vérification avec `hmac.compare_digest`, ce qui évite une comparaison naïve de chaînes:
 
 ```python
+if not AG_CREATOR_ACCESS_TOKEN:
+    return
+
 if not hmac.compare_digest(provided, AG_CREATOR_ACCESS_TOKEN):
     raise HTTPException(status_code=401, detail="Code d'acces API invalide ou manquant.")
 ```
 
-Le code est saisi manuellement dans l'interface et stocké dans `sessionStorage`. Il n'est pas présent dans le code source, ni dans Git.
+Cette protection est volontairement optionnelle dans ce projet pour ne pas bloquer la démonstration locale. La sécurité principale reste que la clé IA n'est jamais envoyée au navigateur.
 
 ### CORS
 
@@ -218,11 +219,11 @@ Chaque réponse reçoit les headers suivants:
 
 Les conteneurs backend et frontend tournent avec des utilisateurs non-root.
 
-Docker Compose refuse de démarrer si ces variables ne sont pas définies:
+Docker Compose refuse de démarrer si la clé fournisseur IA n'est pas définie:
 
 ```yaml
 ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env}
-AG_CREATOR_ACCESS_TOKEN: ${AG_CREATOR_ACCESS_TOKEN:?Set AG_CREATOR_ACCESS_TOKEN in .env}
+AG_CREATOR_ACCESS_TOKEN: ${AG_CREATOR_ACCESS_TOKEN:-}
 ```
 
 Les données SQLite sont stockées dans un volume Docker:
@@ -357,47 +358,48 @@ Route publique de santé. Retourne le modèle, le type de base de données, les 
 
 ### `GET /api/groups`
 
-Protégée. Liste les groupes et leurs agents.
+Protection optionnelle. Liste les groupes et leurs agents.
 
 ### `GET /api/groups/{group_id}`
 
-Protégée. Lit un groupe et ses agents.
+Protection optionnelle. Lit un groupe et ses agents.
 
 ### `POST /api/agents/generate`
 
-Protégée. Crée un groupe et ses agents.
+Protection optionnelle. Crée un groupe et ses agents.
 
 ### `GET /api/agents`
 
-Protégée. Liste tous les agents.
+Protection optionnelle. Liste tous les agents.
 
 ### `GET /api/agents/{agent_id}`
 
-Protégée. Lit un agent et son historique de messages.
+Protection optionnelle. Lit un agent et son historique de messages.
 
 ### `POST /api/agents/{agent_id}/chat`
 
-Protégée. Discute avec un agent en injectant la mémoire partagée du groupe.
+Protection optionnelle. Discute avec un agent en injectant la mémoire partagée du groupe.
 
 ### `DELETE /api/agents/{agent_id}`
 
-Protégée. Supprime un agent et ses messages.
+Protection optionnelle. Supprime un agent et ses messages.
 
 ### `DELETE /api/groups/{group_id}`
 
-Protégée. Supprime un groupe, ses agents et leurs messages.
+Protection optionnelle. Supprime un groupe, ses agents et leurs messages.
 
 ## Flux Frontend
 
 `frontend/src/App.vue` gère le parcours principal:
 
-1. stocker le code d'accès API local dans `sessionStorage`;
-2. appeler `/api/groups` pour charger les groupes;
-3. appeler `/api/agents/generate` pour créer un groupe;
-4. sélectionner un groupe puis un agent;
-5. appeler `/api/agents/{agent_id}` pour charger l'historique;
-6. appeler `/api/agents/{agent_id}/chat` pour continuer une conversation;
-7. appeler les routes `DELETE` pour supprimer un agent ou un groupe.
+1. appeler `/health` pour connaître l'état du backend;
+2. afficher le champ de code d'accès uniquement si `AG_CREATOR_ACCESS_TOKEN` est défini côté backend;
+3. appeler `/api/groups` pour charger les groupes;
+4. appeler `/api/agents/generate` pour créer un groupe;
+5. sélectionner un groupe puis un agent;
+6. appeler `/api/agents/{agent_id}` pour charger l'historique;
+7. appeler `/api/agents/{agent_id}/chat` pour continuer une conversation;
+8. appeler les routes `DELETE` pour supprimer un agent ou un groupe.
 
 `frontend/src/styles.css` contient le système visuel responsive. L'interface est pensée mobile-first, puis s'étend en espace de travail à deux colonnes sur ordinateur.
 
@@ -406,7 +408,7 @@ Protégée. Supprime un groupe, ses agents et leurs messages.
 `backend/app/main.py` contient l'API et l'orchestration:
 
 - `init_db()` crée et migre les tables SQLite.
-- `require_api_access()` protège les routes applicatives.
+- `require_api_access()` protège les routes seulement si `AG_CREATOR_ACCESS_TOKEN` est défini.
 - `require_claude()` bloque les appels IA si la clé fournisseur est absente.
 - `call_claude_for_group()` crée les définitions du groupe et des agents.
 - `insert_group_with_agents()` persiste les données générées.

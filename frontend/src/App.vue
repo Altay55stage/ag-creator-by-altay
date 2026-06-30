@@ -238,12 +238,12 @@ onMounted(async () => {
         </div>
       </div>
 
-      <div class="security-strip">
+      <div class="security-strip" :class="{ protected: apiProtected }">
         <div class="status" :class="{ ready: health?.anthropic_configured }">
           <span></span>
           {{ health?.anthropic_configured ? 'IA connectee' : 'Configuration requise' }}
         </div>
-        <div class="status" :class="{ ready: apiUnlocked }">
+        <div v-if="apiProtected" class="status" :class="{ ready: apiUnlocked }">
           <span></span>
           {{ apiUnlocked ? 'API deverrouillee' : 'Code requis' }}
         </div>
@@ -276,7 +276,7 @@ onMounted(async () => {
             </button>
           </div>
           <p v-if="error" class="error">{{ error }}</p>
-          <form class="access-form" @submit.prevent="saveAccessToken">
+          <form v-if="apiProtected" class="access-form" @submit.prevent="saveAccessToken">
             <label>
               Code d'acces API
               <input v-model="accessInput" type="password" placeholder="Defini dans .env" />
@@ -288,7 +288,7 @@ onMounted(async () => {
           </p>
           <div class="security-note">
             <strong>Securite</strong>
-            <span>La cle IA reste sur le backend. Le code d'acces protege les routes applicatives.</span>
+            <span>La cle IA reste sur le backend. Le code d'acces API est optionnel et peut etre active plus tard.</span>
           </div>
         </div>
 
