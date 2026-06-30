@@ -19,11 +19,15 @@ const error = ref('');
 const health = ref(null);
 const accessToken = ref(sessionStorage.getItem('agCreatorAccessToken') || '');
 const accessInput = ref(accessToken.value);
+const accessSaved = ref(Boolean(accessToken.value));
+const accessMessage = ref(accessSaved.value ? 'Code enregistre pour cette session.' : '');
 
 const selectedGroup = computed(() => groups.value.find((group) => group.id === selectedGroupId.value));
 const agents = computed(() => groups.value.flatMap((group) => group.agents || []));
 const selectedAgent = computed(() => agents.value.find((agent) => agent.id === selectedAgentId.value));
 const totalMessages = computed(() => health.value?.message_count || 0);
+const apiProtected = computed(() => Boolean(health.value?.api_access_protected));
+const apiUnlocked = computed(() => Boolean(health.value) && (!apiProtected.value || accessSaved.value));
 
 async function fetchJson(path, options = {}) {
   const secureHeaders = accessToken.value ? { 'X-AG-Creator-Token': accessToken.value } : {};
@@ -33,20 +37,31 @@ async function fetchJson(path, options = {}) {
   });
   const payload = await response.json().catch(() => ({}));
   if (!response.ok) {
+    if (response.status === 401) {
+      throw new Error(
+        "Code d'acces API invalide ou manquant. Colle la valeur AG_CREATOR_ACCESS_TOKEN de .env puis enregistre."
+      );
+    }
     throw new Error(payload.detail || payload.error || 'Erreur API');
   }
   return payload;
 }
 
-function saveAccessToken() {
+async function saveAccessToken() {
   accessToken.value = accessInput.value.trim();
   if (accessToken.value) {
     sessionStorage.setItem('agCreatorAccessToken', accessToken.value);
   } else {
     sessionStorage.removeItem('agCreatorAccessToken');
+    accessSaved.value = false;
+    accessMessage.value = '';
+    error.value = '';
+    return;
   }
   error.value = '';
-  loadGroups();
+  const tokenValid = await loadGroups();
+  accessSaved.value = tokenValid;
+  accessMessage.value = tokenValid ? 'Code valide pour cette session.' : '';
 }
 
 async function loadHealth() {
@@ -58,6 +73,11 @@ async function loadHealth() {
 }
 
 async function loadGroups() {
+  if (apiProtected.value && !accessToken.value) {
+    groups.value = [];
+    refreshing.value = false;
+    return false;
+  }
   refreshing.value = true;
   try {
     const payload = await fetchJson('/api/groups');
@@ -66,8 +86,14 @@ async function loadGroups() {
       selectedGroupId.value = groups.value[0].id;
       selectedAgentId.value = groups.value[0].agents?.[0]?.id || '';
     }
+    return true;
   } catch (err) {
     error.value = err.message;
+    if (err.message.includes("Code d'acces API")) {
+      accessSaved.value = false;
+      accessMessage.value = '';
+    }
+    return false;
   } finally {
     refreshing.value = false;
   }
@@ -102,6 +128,10 @@ async function selectAgent(agentId) {
 
 async function createGroup() {
   error.value = '';
+  if (!apiUnlocked.value) {
+    error.value = "Code d'acces API requis avant de creer un groupe.";
+    return;
+  }
   loading.value = true;
   try {
     const payload = await fetchJson('/api/agents/generate', {
@@ -162,6 +192,10 @@ async function deleteAgent(agentId) {
 
 async function sendMessage() {
   if (!selectedAgent.value || !chatInput.value.trim()) return;
+  if (!apiUnlocked.value) {
+    error.value = "Code d'acces API requis avant de discuter avec un agent.";
+    return;
+  }
   const message = chatInput.value.trim();
   chatInput.value = '';
   chatting.value = true;
@@ -209,6 +243,10 @@ onMounted(async () => {
           <span></span>
           {{ health?.anthropic_configured ? 'IA connectee' : 'Configuration requise' }}
         </div>
+        <div class="status" :class="{ ready: apiUnlocked }">
+          <span></span>
+          {{ apiUnlocked ? 'API deverrouillee' : 'Code requis' }}
+        </div>
         <div class="metric">
           <strong>{{ health?.group_count || groups.length }}</strong>
           <small>groupes</small>
@@ -233,7 +271,7 @@ onMounted(async () => {
               Agents
               <input v-model="count" min="1" max="8" type="number" />
             </label>
-            <button class="primary-action" :disabled="loading" @click="createGroup">
+            <button class="primary-action" :disabled="loading || !apiUnlocked" @click="createGroup">
               {{ loading ? 'Creation...' : 'Creer le groupe' }}
             </button>
           </div>
@@ -245,6 +283,9 @@ onMounted(async () => {
             </label>
             <button class="ghost-action">Enregistrer</button>
           </form>
+          <p v-if="apiProtected" class="access-state" :class="{ ready: accessSaved }">
+            {{ accessSaved ? accessMessage : 'API protegee: code requis avant creation.' }}
+          </p>
           <div class="security-note">
             <strong>Securite</strong>
             <span>La cle IA reste sur le backend. Le code d'acces protege les routes applicatives.</span>

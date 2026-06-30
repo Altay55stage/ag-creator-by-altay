@@ -121,9 +121,9 @@ h3 {
 
 .security-strip {
   display: grid;
-  grid-template-columns: 1fr 96px 96px;
+  grid-template-columns: 1fr 1fr 96px 96px;
   gap: 10px;
-  min-width: 360px;
+  min-width: 560px;
 }
 
 .status,
@@ -282,6 +282,21 @@ button {
   color: #991b1b;
   background: #fee2e2;
   font-weight: 800;
+}
+
+.access-state {
+  margin: 10px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  color: #9f1239;
+  background: #fff1f2;
+  font-size: 13px;
+  font-weight: 900;
+}
+
+.access-state.ready {
+  color: #047857;
+  background: #ecfdf5;
 }
 
 .security-note {

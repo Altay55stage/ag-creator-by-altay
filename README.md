@@ -91,6 +91,10 @@ Ouvrir:
 
 Dans l'interface, coller la même valeur que `AG_CREATOR_ACCESS_TOKEN` dans le champ `Code d'acces API`.
 
+Si l'interface affiche `Code d'acces API invalide ou manquant` ou si les logs backend montrent `401 Unauthorized`,
+cela signifie que le code d'accès n'a pas été envoyé ou ne correspond pas à `AG_CREATOR_ACCESS_TOKEN`.
+Ce n'est pas une erreur Anthropic: l'appel IA n'est pas encore lancé tant que cette protection refuse la requête.
+
 Arrêter l'application:
 
 ```bash
