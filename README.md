@@ -1,34 +1,34 @@
 # AG Creator by Altay
 
-AG Creator by Altay is a full-stack web application for creating groups of AI agents from a French natural-language brief, storing them in SQLite, and chatting with each agent while sharing context across the whole group.
+AG Creator by Altay est une application web full-stack qui permet de créer des groupes d'agents IA à partir d'une consigne en français, de les stocker dans SQLite, puis de discuter avec chaque agent tout en partageant le contexte entre les agents du même groupe.
 
-The project is intentionally small enough to run locally, but structured like a real application:
+Le projet reste simple à lancer en local, mais il est structuré comme une vraie application:
 
-- Vue 3 + Vite frontend
-- Python FastAPI backend
-- SQLite persistence
-- Anthropic Messages API
-- Docker Compose
-- API access token
-- backend-only AI provider key
-- group-level shared conversation memory
+- frontend Vue 3 + Vite;
+- backend Python FastAPI;
+- persistance SQLite;
+- API Anthropic Messages;
+- Docker Compose;
+- code d'accès API local;
+- clé fournisseur IA uniquement côté backend;
+- mémoire conversationnelle partagée au niveau du groupe.
 
-## What The App Does
+## Fonctionnement
 
-1. A user writes a French brief.
-2. The backend asks the AI provider to return a strict JSON object containing one group and several specialized agents.
-3. The backend stores the group and agents in SQLite.
-4. The user selects a group, then an agent.
-5. The user chats with the selected agent.
-6. When an agent answers, the backend gives it:
-   - its own system prompt;
-   - its own recent conversation;
-   - the recent messages from the other agents in the same group.
-7. The response and the visible explanation are stored in SQLite.
+1. L'utilisateur écrit un brief en français.
+2. Le backend demande au fournisseur IA de retourner un JSON strict contenant un groupe et plusieurs agents spécialisés.
+3. Le backend stocke le groupe et ses agents dans SQLite.
+4. L'utilisateur sélectionne un groupe, puis un agent.
+5. L'utilisateur discute avec l'agent sélectionné.
+6. Quand un agent répond, le backend lui fournit:
+   - son prompt système;
+   - son historique récent direct;
+   - les messages récents des autres agents du même groupe.
+7. La réponse et la trace explicative visible sont stockées dans SQLite.
 
-This means agents in the same group are not isolated. They are aware of the group's recent conversation history through backend-controlled shared memory.
+Les agents d'un même groupe ne sont donc pas isolés: ils reçoivent une mémoire partagée construite côté backend à partir des conversations du groupe.
 
-## Repository Structure
+## Structure Du Projet
 
 ```text
 .
@@ -52,51 +52,51 @@ This means agents in the same group are not isolated. They are aware of the grou
 └── README.md
 ```
 
-## Local Setup With Docker
+## Installation Avec Docker
 
-Copy the environment template:
+Copier le modèle d'environnement:
 
 ```bash
 cp .env.example .env
 ```
 
-Generate a local API access token:
+Générer un code d'accès local pour protéger l'API:
 
 ```bash
 openssl rand -hex 32
 ```
 
-Edit `.env`:
+Modifier `.env`:
 
 ```bash
-ANTHROPIC_API_KEY=your_anthropic_key
+ANTHROPIC_API_KEY=votre_cle_anthropic
 ANTHROPIC_MODEL=claude-sonnet-4-6
 FRONTEND_ORIGIN=http://localhost:5173
 DATABASE_URL=sqlite:///./data/ag_creator.sqlite3
-AG_CREATOR_ACCESS_TOKEN=your_random_64_hex_token
+AG_CREATOR_ACCESS_TOKEN=votre_token_aleatoire_64_hex
 ```
 
-Start the app:
+Lancer l'application:
 
 ```bash
 docker compose --env-file .env up --build
 ```
 
-Open:
+Ouvrir:
 
-- Frontend: http://localhost:5173
-- Backend health: http://localhost:8000/health
-- API docs: http://localhost:8000/docs
+- frontend: http://localhost:5173
+- santé backend: http://localhost:8000/health
+- documentation API: http://localhost:8000/docs
 
-In the frontend, paste the same `AG_CREATOR_ACCESS_TOKEN` into the "Code d'acces API" field.
+Dans l'interface, coller la même valeur que `AG_CREATOR_ACCESS_TOKEN` dans le champ `Code d'acces API`.
 
-Stop the app:
+Arrêter l'application:
 
 ```bash
 docker compose down
 ```
 
-## Local Setup Without Docker
+## Installation Sans Docker
 
 Backend:
 
@@ -116,53 +116,57 @@ npm install
 npm run dev
 ```
 
-Open http://localhost:5173.
+Ouvrir:
 
-## Environment Variables
+```text
+http://localhost:5173
+```
 
-| Variable | Required | Used By | Description |
+## Variables D'environnement
+
+| Variable | Obligatoire | Utilisée Par | Description |
 | --- | --- | --- | --- |
-| `ANTHROPIC_API_KEY` | Yes | Backend | Secret provider key. Never put it in the frontend. |
-| `ANTHROPIC_MODEL` | Yes | Backend | Model name used for agent generation and chat. |
-| `FRONTEND_ORIGIN` | Yes | Backend | Allowed browser origin for CORS. |
-| `DATABASE_URL` | Yes | Backend | SQLite location, for example `sqlite:///./data/ag_creator.sqlite3`. |
-| `AG_CREATOR_ACCESS_TOKEN` | Yes | Backend and user session | Local API access code sent as `X-AG-Creator-Token`. |
+| `ANTHROPIC_API_KEY` | Oui | Backend | Clé secrète du fournisseur IA. Ne jamais la mettre dans le frontend. |
+| `ANTHROPIC_MODEL` | Oui | Backend | Nom du modèle utilisé pour créer les agents et discuter. |
+| `FRONTEND_ORIGIN` | Oui | Backend | Origine navigateur autorisée par CORS. |
+| `DATABASE_URL` | Oui | Backend | Emplacement SQLite, par exemple `sqlite:///./data/ag_creator.sqlite3`. |
+| `AG_CREATOR_ACCESS_TOKEN` | Oui | Backend + session utilisateur | Code d'accès local envoyé dans le header `X-AG-Creator-Token`. |
 
-`.env` is ignored by Git. Do not commit real secrets.
+Le fichier `.env` est ignoré par Git. Il ne faut jamais committer de vrais secrets.
 
-## Security Model
+## Sécurité
 
-### AI Provider Key
+### Clé Du Fournisseur IA
 
-The Anthropic API key is only read by the backend:
+La clé Anthropic est lue uniquement par le backend:
 
 ```python
 ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "").strip()
 anthropic_client = Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 ```
 
-The Vue frontend never receives this key. It only calls the local FastAPI backend.
+Le frontend Vue ne reçoit jamais cette clé. Il appelle uniquement l'API FastAPI locale.
 
-### API Access Token
+### Code D'accès API
 
-Application routes are protected with a local access token:
+Les routes applicatives sont protégées par un code d'accès local:
 
 ```http
 X-AG-Creator-Token: <AG_CREATOR_ACCESS_TOKEN>
 ```
 
-The backend validates it with `hmac.compare_digest`, which avoids basic timing comparison issues:
+Le backend valide ce code avec `hmac.compare_digest`, ce qui évite une comparaison naïve de chaînes:
 
 ```python
 if not hmac.compare_digest(provided, AG_CREATOR_ACCESS_TOKEN):
     raise HTTPException(status_code=401, detail="Code d'acces API invalide ou manquant.")
 ```
 
-The token is entered manually in the UI and stored in `sessionStorage`, not in Git and not in the frontend source.
+Le code est saisi manuellement dans l'interface et stocké dans `sessionStorage`. Il n'est pas présent dans le code source, ni dans Git.
 
 ### CORS
 
-CORS is restricted to `FRONTEND_ORIGIN`:
+CORS est limité à `FRONTEND_ORIGIN`:
 
 ```python
 allow_origins=[FRONTEND_ORIGIN]
@@ -170,9 +174,9 @@ allow_methods=["GET", "POST", "DELETE", "OPTIONS"]
 allow_headers=["Content-Type", "X-AG-Creator-Token"]
 ```
 
-### Security Headers
+### Headers De Sécurité
 
-Every response receives:
+Chaque réponse reçoit les headers suivants:
 
 - `X-Content-Type-Options: nosniff`
 - `X-Frame-Options: DENY`
@@ -180,31 +184,31 @@ Every response receives:
 - `Permissions-Policy: camera=(), microphone=(), geolocation=()`
 - `Cache-Control: no-store`
 
-### Docker Security
+### Sécurité Docker
 
-The backend and frontend containers run with non-root users.
+Les conteneurs backend et frontend tournent avec des utilisateurs non-root.
 
-Docker Compose refuses to start unless these variables exist:
+Docker Compose refuse de démarrer si ces variables ne sont pas définies:
 
 ```yaml
 ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:?Set ANTHROPIC_API_KEY in .env}
 AG_CREATOR_ACCESS_TOKEN: ${AG_CREATOR_ACCESS_TOKEN:?Set AG_CREATOR_ACCESS_TOKEN in .env}
 ```
 
-SQLite data is stored in a Docker volume:
+Les données SQLite sont stockées dans un volume Docker:
 
 ```yaml
 volumes:
   - ag_creator_data:/app/data
 ```
 
-## Database Schema
+## Schéma SQLite
 
-SQLite is initialized automatically at backend startup.
+SQLite est initialisé automatiquement au démarrage du backend.
 
 ### `groups`
 
-Stores one generated group:
+Stocke un groupe généré:
 
 - `id`
 - `title`
@@ -215,7 +219,7 @@ Stores one generated group:
 
 ### `agents`
 
-Stores agents linked to a group:
+Stocke les agents rattachés à un groupe:
 
 - `id`
 - `group_id`
@@ -230,11 +234,11 @@ Stores agents linked to a group:
 - `model`
 - `created_at`
 
-`group_id` uses `ON DELETE CASCADE`, so deleting a group deletes its agents.
+`group_id` utilise `ON DELETE CASCADE`: supprimer un groupe supprime ses agents.
 
 ### `messages`
 
-Stores conversations per agent:
+Stocke les conversations par agent:
 
 - `id`
 - `agent_id`
@@ -244,11 +248,11 @@ Stores conversations per agent:
 - `model`
 - `created_at`
 
-`agent_id` uses `ON DELETE CASCADE`, so deleting an agent deletes its messages.
+`agent_id` utilise `ON DELETE CASCADE`: supprimer un agent supprime ses messages.
 
-## How Agent Groups Are Created
+## Création Des Groupes D'agents
 
-The endpoint `POST /api/agents/generate` receives:
+L'endpoint `POST /api/agents/generate` reçoit:
 
 ```json
 {
@@ -257,47 +261,47 @@ The endpoint `POST /api/agents/generate` receives:
 }
 ```
 
-The backend builds a prompt asking the provider for strict JSON:
+Le backend construit un prompt demandant une sortie JSON stricte:
 
 ```json
 {
   "group": {
-    "title": "short group title",
-    "summary": "group objective"
+    "title": "titre court du groupe",
+    "summary": "objectif du groupe"
   },
   "agents": [
     {
-      "name": "agent name",
-      "role": "clear role",
-      "mission": "concrete mission",
-      "tools": ["capability"],
-      "success_criteria": ["criterion"],
-      "system_prompt": "usable system prompt",
-      "creation_reasoning": "public explanation"
+      "name": "nom de l'agent",
+      "role": "role clair",
+      "mission": "mission concrete",
+      "tools": ["capacite"],
+      "success_criteria": ["critere"],
+      "system_prompt": "prompt systeme utilisable",
+      "creation_reasoning": "explication publique"
     }
   ]
 }
 ```
 
-The backend parses the JSON, normalizes the fields, generates UUIDs, and inserts the group and agents into SQLite in one transaction.
+Le backend parse le JSON, normalise les champs, génère les UUID, puis insère le groupe et ses agents dans SQLite.
 
-## How Agents Share Group Context
+## Mémoire Partagée Entre Agents
 
-Each direct chat still belongs to one selected agent. However, before calling the provider, the backend builds a shared group memory with recent messages from every agent in the same group:
+Chaque conversation directe appartient toujours à un agent sélectionné. En revanche, avant d'appeler le fournisseur IA, le backend construit une mémoire partagée avec les messages récents de tous les agents du même groupe:
 
 ```python
 shared_context = group_conversation_context(db, agent["group_id"], agent_id)
 ```
 
-That function joins `messages` with `agents`, filters by `agents.group_id`, and returns recent group messages like:
+Cette fonction joint les tables `messages` et `agents`, filtre par `agents.group_id`, puis retourne les derniers messages du groupe sous une forme lisible:
 
 ```text
-- [time] other agent: Risk Analyst / Risk Analyst: ...
-- [time] agent actif / User: ...
-- [time] other agent: QA Agent / QA Agent: ...
+- [time] autre agent: Risk Analyst / Risk Analyst: ...
+- [time] agent actif / Utilisateur: ...
+- [time] autre agent: QA Agent / QA Agent: ...
 ```
 
-The selected agent receives that shared memory in its system context:
+L'agent sélectionné reçoit ensuite cette mémoire dans son contexte système:
 
 ```text
 Memoire partagee du groupe:
@@ -307,115 +311,115 @@ Tu fais partie d'un groupe d'agents. Utilise la memoire partagee ci-dessus pour 
 echanges des autres agents du meme groupe.
 ```
 
-This is how agents become aware of what other agents in their group have said. The frontend does not assemble this context; the backend does it, so the behavior is consistent and controlled.
+C'est ce mécanisme qui permet aux agents d'un même groupe d'être au courant des échanges des autres agents. Le frontend ne reconstruit pas cette mémoire; elle est produite côté backend pour garder un comportement cohérent et contrôlé.
 
-## Visible Reasoning
+## Trace Explicative Visible
 
-The app stores a `visible_reasoning` field for assistant messages. This is a short public explanation of criteria, assumptions, and visible steps.
+L'application stocke un champ `visible_reasoning` pour les messages assistant. Il s'agit d'une courte explication publique: critères utilisés, hypothèses visibles, étapes utiles.
 
-It is not hidden chain-of-thought. The app asks for useful explanation without exposing private internal reasoning.
+Ce n'est pas une chaîne de pensée interne cachée. L'application demande une explication utile sans exposer de raisonnement interne sensible.
 
-## API Routes
+## Routes API
 
 ### `GET /health`
 
-Public health check. Returns model, database type, counts, and whether API access protection is enabled.
+Route publique de santé. Retourne le modèle, le type de base de données, les compteurs et l'état de protection par code d'accès.
 
 ### `GET /api/groups`
 
-Protected. Lists groups and their agents.
+Protégée. Liste les groupes et leurs agents.
 
 ### `GET /api/groups/{group_id}`
 
-Protected. Reads one group and its agents.
+Protégée. Lit un groupe et ses agents.
 
 ### `POST /api/agents/generate`
 
-Protected. Creates a group and its agents.
+Protégée. Crée un groupe et ses agents.
 
 ### `GET /api/agents`
 
-Protected. Lists all agents.
+Protégée. Liste tous les agents.
 
 ### `GET /api/agents/{agent_id}`
 
-Protected. Reads one agent and its message history.
+Protégée. Lit un agent et son historique de messages.
 
 ### `POST /api/agents/{agent_id}/chat`
 
-Protected. Chats with one agent while injecting shared group memory.
+Protégée. Discute avec un agent en injectant la mémoire partagée du groupe.
 
 ### `DELETE /api/agents/{agent_id}`
 
-Protected. Deletes one agent and its messages.
+Protégée. Supprime un agent et ses messages.
 
 ### `DELETE /api/groups/{group_id}`
 
-Protected. Deletes a group, its agents, and their messages.
+Protégée. Supprime un groupe, ses agents et leurs messages.
 
-## Frontend Flow
+## Flux Frontend
 
-`frontend/src/App.vue` owns the main user flow:
+`frontend/src/App.vue` gère le parcours principal:
 
-1. store the local API access code in `sessionStorage`;
-2. call `/api/groups` to load groups;
-3. call `/api/agents/generate` to create a group;
-4. select a group and then an agent;
-5. call `/api/agents/{agent_id}` to hydrate message history;
-6. call `/api/agents/{agent_id}/chat` to continue a conversation;
-7. call `DELETE` routes to remove agents or groups.
+1. stocker le code d'accès API local dans `sessionStorage`;
+2. appeler `/api/groups` pour charger les groupes;
+3. appeler `/api/agents/generate` pour créer un groupe;
+4. sélectionner un groupe puis un agent;
+5. appeler `/api/agents/{agent_id}` pour charger l'historique;
+6. appeler `/api/agents/{agent_id}/chat` pour continuer une conversation;
+7. appeler les routes `DELETE` pour supprimer un agent ou un groupe.
 
-`frontend/src/styles.css` contains the responsive visual system. The UI is mobile-first but expands to a two-column desktop workspace.
+`frontend/src/styles.css` contient le système visuel responsive. L'interface est pensée mobile-first, puis s'étend en espace de travail à deux colonnes sur ordinateur.
 
-## Backend Flow
+## Flux Backend
 
-`backend/app/main.py` contains the API and orchestration:
+`backend/app/main.py` contient l'API et l'orchestration:
 
-- `init_db()` creates and migrates SQLite tables.
-- `require_api_access()` protects application routes.
-- `require_claude()` blocks AI calls if the provider key is missing.
-- `call_claude_for_group()` creates the group and agent definitions.
-- `insert_group_with_agents()` persists generated data.
-- `group_conversation_context()` builds shared memory across agents in the same group.
-- `chat_with_agent()` stores the user message, injects shared memory, calls the provider, and stores the assistant answer.
+- `init_db()` crée et migre les tables SQLite.
+- `require_api_access()` protège les routes applicatives.
+- `require_claude()` bloque les appels IA si la clé fournisseur est absente.
+- `call_claude_for_group()` crée les définitions du groupe et des agents.
+- `insert_group_with_agents()` persiste les données générées.
+- `group_conversation_context()` construit la mémoire partagée entre agents du même groupe.
+- `chat_with_agent()` stocke le message utilisateur, injecte la mémoire partagée, appelle le fournisseur IA, puis stocke la réponse assistant.
 
-## Development Checks
+## Vérifications De Développement
 
-Backend syntax:
+Syntaxe backend:
 
 ```bash
 python3 -m py_compile backend/app/main.py
 ```
 
-Frontend build:
+Build frontend:
 
 ```bash
 cd frontend
 npm run build
 ```
 
-Docker config:
+Configuration Docker:
 
 ```bash
 docker compose config
 ```
 
-Secret scan:
+Recherche de secrets:
 
 ```bash
-rg -n "ghp_|gho_|sk-ant|ANTHROPIC_API_KEY=.*[A-Za-z0-9_-]{20,}" .
+rg -n "ghp_|gho_|sk-ant|ANTHROPIC_API_KEY=.*[A-Za-z0-9_-]{20,}|AG_CREATOR_ACCESS_TOKEN=.*[A-Za-z0-9_-]{20,}" .
 ```
 
-## Production Notes
+## Notes De Production
 
-This project is designed as a local/full-stack prototype. For production, add:
+Ce projet est conçu comme un prototype full-stack local. Pour une production réelle, il faudrait ajouter:
 
-- real user authentication;
-- HTTPS termination;
-- request rate limiting;
-- audit logging;
-- managed secret storage;
-- PostgreSQL instead of local SQLite if multiple users write concurrently;
-- deployment-specific allowed hosts and CORS origins;
-- backups for persistent data.
+- authentification utilisateur complète;
+- HTTPS;
+- limitation de débit;
+- journalisation d'audit;
+- gestionnaire de secrets managé;
+- PostgreSQL à la place de SQLite si plusieurs utilisateurs écrivent en même temps;
+- configuration CORS et hosts adaptée au domaine de déploiement;
+- stratégie de sauvegarde des données persistantes.
 
